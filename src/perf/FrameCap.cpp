@@ -300,26 +300,9 @@ void FrameCap_EnsureInit(void)
     if (s_Enable) LogLine("framecap: on");
 }
 
-int FrameCap_Enabled(void)
-{
-    if (!s_Init) FrameCap_EnsureInit();
-    return s_Enable;
-}
-
-void FrameCap_SetEnabled(int on)
-{
-    s_Enable = on ? 1 : 0;
-    FC_ResetPace();
-}
-
 void FrameCap_SetActiveDlg(void* hwnd)
 {
     s_Dlg = hwnd;
     s_Until = 0;
     s_ChkAt = 0;
-}
-
-void* FrameCap_ActiveDlg(void)
-{
-    return s_Dlg;
 }

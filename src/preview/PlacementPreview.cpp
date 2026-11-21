@@ -18,16 +18,12 @@
  * 已加载则完全不画, 避免双层预览。
  *
  * 配置 [PlacementPreview]: Opacity=0/25/50/75/100 (默认 25, 100 = 不透明), 0 = 关闭。
- * 同一档同时也是展开预览虚影的浓度 (DeployPreview 通过 PlacementPreview_Opacity
- * 取用), 所以展开虚影没有自己的开关。
  */
 
 #include <windows.h>
 #include "GdiText.h"
-#include "MOExperience.h"
+#include "SA_EE.h"
 #include "OrderUtil.h"
-#include "ScaleBar.h"
-#include "PlacementPreview.h"
 
 #define PP_SECTION "PlacementPreview"
 
@@ -68,10 +64,7 @@
 #define PP_OFFSET_Z 1
 
 /* 缩放档虚影 (自绘缩放) 用的尺寸常量。 */
-#define PP_CANVAS_MAX   1024      /* 画布尺寸上限 (防坏数据/巨图) */
 #define PP_SCR_MAX      640       /* 离屏面单边上限 */
-#define PP_GHOST_MARGIN 4         /* 画布四周留白 (缩放取整别裁边) */
-#define PP_ZOOM_PIX_MAX 2000000L  /* 单块缩放虚影像素上限 (逐像素混合, 太大卡帧) */
 
 typedef int (__attribute__((thiscall)) *PpC2C)(void* tac,
     const CoordStruct* c, Point2D* out);
@@ -130,35 +123,12 @@ static void PP_EnsureInit(void)
 
 /* ---------------- 公共虚影绘制 (放置预览 / 展开预览共用) ---------------- */
 
-int PlacementPreview_Opacity(void)
-{
-    PP_EnsureInit();
-    return g_PpOpacity;
-}
-
-void PlacementPreview_SetOpacity(int pct)
-{
-    int v;
-
-    PP_EnsureInit();
-    v = PP_NormOpacity(pct);
-    if (v == g_PpOpacity) return;
-    g_PpOpacity = v;
-    PP_LogOpacity();
-}
-
-/* ---------------- 形状/调色板解析 (1:1 与缩放两条路径共用) ---------------- */
-
-/* 解出要画的 SHP + 帧 + 画布尺寸 (SHPStruct 宽高 = 该文件最大画布)。
- * 1=成功; 画布尺寸拿不到时回 0 (1:1 路径仍能画, 缩放路径不画)。
- * wOut/hOut 可传 NULL (1:1 路径不需要画布尺寸)。 */
-static int PP_ResolveShape(void* type, void** shpOut, int* frameOut,
-                           int* wOut, int* hOut)
+static int PP_ResolveShape(void* type, void** shpOut, int* frameOut)
 {
     void** vt;
     void* shp;
     unsigned fn;
-    int frame, frames, w, h;
+    int frame, frames;
 
     if (!type || !IsPlausiblePtr(type)) return 0;
     vt = *(void***)type;
@@ -189,19 +159,8 @@ static int PP_ResolveShape(void* type, void** shpOut, int* frameOut,
         frame = 0;
     }
 
-    /* 画布尺寸: SHP 头里的最大宽高。缩放路径靠它算离屏面大小, 1:1 路径不用,
-     * 所以取不到也不算失败 (回 0, 由调用方决定能不能画)。 */
-    w = (int)*(short*)((char*)shp + 2);            /* SHPStruct::Width  */
-    h = (int)*(short*)((char*)shp + 4);            /* SHPStruct::Height */
-    if (w < 0) w = 0;
-    if (h < 0) h = 0;
-    if (w > PP_CANVAS_MAX) w = 0;
-    if (h > PP_CANVAS_MAX) h = 0;
-
     *shpOut = shp;
     *frameOut = frame;
-    if (wOut) *wOut = w;
-    if (hOut) *hOut = h;
     return 1;
 }
 
@@ -254,7 +213,7 @@ static void PP_DrawGhost1to1(void* type, void* owner, void* surf,
 
     if (!surf || !IsPlausiblePtr(surf)) return;
     if (opacity <= 0) return;
-    if (!PP_ResolveShape(type, &shp, &frame, NULL, NULL)) return;
+    if (!PP_ResolveShape(type, &shp, &frame)) return;
     pal = PP_ResolvePal(owner);
     if (!pal) return;
 
@@ -262,230 +221,6 @@ static void PP_DrawGhost1to1(void* type, void* owner, void* surf,
     h = GtSurfGet(surf, GtVT_GET_HEIGHT);
     if (w <= 0 || h <= 32) return;
     PP_Blit1to1(surf, shp, frame, pal, x, y, opacity, w, h - 32);  /* 不画进工具栏 */
-}
-
-/* ---------------- 缩放档: 离屏原尺寸渲染 + 最近邻缩放 + 半透明混合 ----------------
- * 界面缩放下 (ScaleBar) 展开预览画在合成面 A 上, 而引擎 SHP blit 不会缩放,
- * 所以这里自己来: 先把虚影 1:1 画进一块离屏面 (引擎负责调色板/玩家色/透明),
- * 再最近邻缩放到屏幕矩形, 按 trans 与目标面像素混合写回。
- * 离屏面清 0x0000, 引擎 blit 带 Nonzero 跳过透明像素 ⇒ 非 0 即虚影像素。
- * 缩放结果按 (SHP,帧,调色板,目标宽高) 缓存, 换档/换类型才重建。 */
-
-static void* s_PpScr = 0;
-static int s_PpScrW = 0, s_PpScrH = 0;
-
-static void* s_PpBmp = 0;         /* 缩放后 RGB565 位图 (0x0000 = 透明) */
-static int s_PpBmpCap = 0;        /* 容量 (像素) */
-static int s_PpBmpW = 0, s_PpBmpH = 0;
-static void* s_PpKeyShp = 0;
-static int s_PpKeyFrame = -1;
-
-/* 取足够大的离屏面 (尺寸变化就重建)。 */
-static void* PP_Scratch(int w, int h)
-{
-    if (w <= 0 || h <= 0 || w > PP_SCR_MAX || h > PP_SCR_MAX) return 0;
-    if (s_PpScr && s_PpScrW == w && s_PpScrH == h) return s_PpScr;
-    if (s_PpScr)
-    {
-        SB_FreeOffscreen(s_PpScr);
-        s_PpScr = 0;
-        s_PpScrW = s_PpScrH = 0;
-    }
-    s_PpScr = SB_NewOffscreen(w, h);
-    if (!s_PpScr) return 0;
-    s_PpScrW = w;
-    s_PpScrH = h;
-    return s_PpScr;
-}
-
-/* 把 16bpp 离屏面 (bw x bh) 最近邻缩放到 s_PpBmp (dw x dh)。 */
-static int PP_BuildScaled(unsigned char* src, int srcPitch, int bw, int bh,
-                          int dw, int dh)
-{
-    int need, x, y, sx, sy, xacc, yacc;
-    unsigned short* dst;
-
-    need = dw * dh;
-    if (need <= 0 || bw <= 0 || bh <= 0) return 0;
-    if (!s_PpBmp || s_PpBmpCap < need)
-    {
-        void* nb;
-        nb = HeapAlloc(GetProcessHeap(), 0,
-                       (SIZE_T)need * sizeof(unsigned short));
-        if (!nb) return 0;
-        if (s_PpBmp) HeapFree(GetProcessHeap(), 0, s_PpBmp);
-        s_PpBmp = nb;
-        s_PpBmpCap = need;
-        s_PpBmpW = s_PpBmpH = 0;
-    }
-    dst = (unsigned short*)s_PpBmp;
-
-    yacc = 0; sy = 0;
-    for (y = 0; y < dh; y++)
-    {
-        unsigned short* srow = (unsigned short*)(src + (size_t)sy * srcPitch);
-        unsigned short* drow = dst + (size_t)y * dw;
-        xacc = 0; sx = 0;
-        for (x = 0; x < dw; x++)
-        {
-            drow[x] = srow[sx];
-            xacc += bw;
-            while (xacc >= dw) { xacc -= dw; sx++; }
-        }
-        yacc += bh;
-        while (yacc >= dh) { yacc -= dh; sy++; }
-        if (sy >= bh) sy = bh - 1;
-    }
-    s_PpBmpW = dw;
-    s_PpBmpH = dh;
-    return 1;
-}
-
-/* 16bpp 单像素混合: ws = 源权重 (0..256)。通道位宽按 GdiText 标定
- * (565 或 555; 表面格式由引擎当前视频模式决定)。 */
-static unsigned short PP_Mix16(unsigned short s, unsigned short d, unsigned ws)
-{
-    unsigned gb, rs, gm, sr, sg, sb, dr, dg, db, wd;
-
-    gb = (g_GBits == 6) ? 6u : 5u;
-    gm = (gb == 6) ? 63u : 31u;
-    rs = gb + 5u;                     /* R 起点: 565=11, 555=10 */
-    wd = 256u - ws;
-    sr = (s >> rs) & 31u; sg = (s >> 5) & gm; sb = s & 31u;
-    dr = (d >> rs) & 31u; dg = (d >> 5) & gm; db = d & 31u;
-    return (unsigned short)((((sr * ws + dr * wd) >> 8) << rs)
-                          | (((sg * ws + dg * wd) >> 8) << 5)
-                          |   ((sb * ws + db * wd) >> 8));
-}
-
-/* 把缓存位图混合写进目标面 (调用方已锁面), 裁剪到 (0,0,w,h)。
- * 源权重按 opacity 百分比算 (100 = 直接覆盖)。 */
-static void PP_BlendBmp(unsigned char* base, int pitch, int w, int h,
-                        int dx, int dy, int opacity)
-{
-    unsigned short* bmp = (unsigned short*)s_PpBmp;
-    unsigned ws;
-    int x, y, x0, x1, y0, y1;
-
-    if (!bmp || s_PpBmpW <= 0 || s_PpBmpH <= 0) return;
-    ws = (unsigned)(opacity * 256 / 100);
-    if (ws > 256u) ws = 256u;
-
-    x0 = dx < 0 ? -dx : 0;
-    y0 = dy < 0 ? -dy : 0;
-    x1 = s_PpBmpW;
-    if (dx + x1 > w) x1 = w - dx;
-    y1 = s_PpBmpH;
-    if (dy + y1 > h) y1 = h - dy;
-    if (x0 >= x1 || y0 >= y1) return;
-
-    for (y = y0; y < y1; y++)
-    {
-        unsigned short* srow = bmp + (size_t)y * s_PpBmpW;
-        unsigned short* drow = (unsigned short*)(base + (size_t)(dy + y) * pitch)
-                             + (dx + x0);
-        for (x = x0; x < x1; x++)
-        {
-            unsigned short s = srow[x];
-            if (!s) continue;                 /* 0 = 非虚影像素 */
-            drow[x - x0] = (ws >= 256u) ? s : PP_Mix16(s, drow[x - x0], ws);
-        }
-    }
-}
-
-/* 缩放档绘制: 视图空间锚点 (vx,vy) → 屏幕矩形, 半透明混合写入 surf。
- * 返回消耗的目标面像素数 (0 = 没画)。 */
-static int PP_DrawGhostZoomed(void* type, void* owner, void* surf,
-                              int vx, int vy, int opacity)
-{
-    void *shp, *pal, *scr;
-    int frame, sw, sh, bw, bh, dw, dh;
-    int x0, y0, x1, y1, numX, numY;
-    int tw, th, tpit, tbpp, spit;
-    unsigned char* sc;
-    unsigned char* db;
-
-    if (!surf || !IsPlausiblePtr(surf)) return 0;
-    if (!PP_ResolveShape(type, &shp, &frame, &sw, &sh)) return 0;
-    if (sw <= 0 || sh <= 0) return 0;      /* 缩放要按画布尺寸开面, 取不到就不画 */
-    bw = sw + PP_GHOST_MARGIN * 2;
-    bh = sh + PP_GHOST_MARGIN * 2;
-    pal = PP_ResolvePal(owner);
-    if (!pal) return 0;
-    scr = PP_Scratch(bw, bh);
-    if (!scr) return 0;
-
-    /* 屏幕缩放比: 每 1000 视图像素映到多少屏幕像素 (与实际投影同一套整数除法,
-     * 位置无关, 避免每帧 ±1 抖导致缓存反复重建)。 */
-    if (!SB_ViewToScreen(vx, vy, &x0, &y0)) return 0;
-    if (!SB_ViewToScreen(vx + 1000, vy + 1000, &x1, &y1)) return 0;
-    numX = x1 - x0;
-    numY = y1 - y0;
-    if (numX <= 0 || numY <= 0) return 0;
-    dw = (int)(((long)bw * numX + 500) / 1000);
-    dh = (int)(((long)bh * numY + 500) / 1000);
-    if (dw < 8 || dh < 8 || dw > PP_SCR_MAX * 4) return 0;
-    if ((long)dw * (long)dh > PP_ZOOM_PIX_MAX) return 0;   /* 太大就别画, 免逐像素卡帧 */
-
-    /* 缓存命中就不重建 (1:1 渲染 + 缩放都省掉)。 */
-    /* 调色板不进 key: 它随光照/单位状态抖动, 进 key 会逐帧重建 (只影响浓淡)。 */
-    if (s_PpKeyShp != shp || s_PpKeyFrame != frame
-        || s_PpBmpW != dw || s_PpBmpH != dh)
-    {
-        s_PpKeyShp = 0;
-        s_PpBmpW = s_PpBmpH = 0;
-        /* 离屏面清 0 (缓冲内容未定义), 再 1:1 画进去 (不带透明, 只留原始像素)。 */
-        if (GtSurfGet(scr, GtVT_GET_BPP) != 2) return 0;   /* 2 = 16bpp */
-        spit = GtSurfGet(scr, GtVT_GET_PITCH);
-        if (spit <= 0) return 0;
-        sc = GtLock(scr);
-        if (!sc) return 0;
-        memset(sc, 0, (size_t)spit * (size_t)bh);
-        GtUnlock(scr);
-        PP_Blit1to1(scr, shp, frame, pal, bw / 2, bh / 2, 100, bw, bh);
-        sc = GtLock(scr);
-        if (!sc) return 0;
-        if (!PP_BuildScaled(sc, spit, bw, bh, dw, dh))
-        {
-            GtUnlock(scr);
-            return 0;
-        }
-        GtUnlock(scr);
-        s_PpKeyShp = shp;
-        s_PpKeyFrame = frame;
-    }
-
-    /* 写回: 只有 16bpp 面能按 565/555 通道混合。 */
-    tbpp = GtSurfGet(surf, GtVT_GET_BPP);
-    if (tbpp != 2) return 0;            /* 2 = 16bpp (按字节) */
-    tw = GtSurfGet(surf, GtVT_GET_WIDTH);
-    th = GtSurfGet(surf, GtVT_GET_HEIGHT);
-    tpit = GtSurfGet(surf, GtVT_GET_PITCH);
-    if (tw <= 0 || th <= 32 || tpit < tw * 2) return 0;
-    db = GtLock(surf);
-    if (!db) return 0;
-    PP_BlendBmp(db, tpit, tw, th - 32, x0 - dw / 2, y0 - dh / 2, opacity);
-    GtUnlock(surf);
-    return dw * dh;
-}
-
-/* 视图空间锚点画虚影 (展开预览等界面层用): 1x 直通引擎 blit,
- * 缩放档走离屏缩放+混合。返回消耗的目标面像素数 (1x 恒 1)。 */
-int PlacementPreview_DrawGhostView(void* type, void* owner, void* surf,
-                                   int vx, int vy, int opacity)
-{
-    int sx, sy;
-    if (!type || !IsPlausiblePtr(type)) return 0;
-    if (!surf || !IsPlausiblePtr(surf)) return 0;
-    if (opacity <= 0) return 0;
-    vx += PP_OFFSET_X;
-    vy += PP_OFFSET_Y;
-    /* 缩放路径失败 (面不合适/画布过大) 不退回 1:1: 大小和位置都会错。 */
-    if (SB_Zoomed())
-        return PP_DrawGhostZoomed(type, owner, surf, vx, vy, opacity);
-    if (!SB_ViewToScreen(vx, vy, &sx, &sy)) { sx = vx; sy = vy; }
-    PP_DrawGhost1to1(type, owner, surf, sx, sy, opacity);
-    return 1;
 }
 
 /* ---------------- 绘制 hook ---------------- */

@@ -6,8 +6,6 @@
 #include "GdiText.h"
 #include "OrderUtil.h"
 #include "OrderThrottle.h"   /* OT_Fire: OU_FireMega 的收尾 */
-#include "FullMap.h"         /* FM_GetViewRects: OU_ViewClip */
-#include "ScaleBar.h"
 
 int OU_IsUnit(void* p)
 {
@@ -38,16 +36,6 @@ int OU_IsMP(void)
 {
     int gm = *(int*)0xA8B238u;   /* SessionClass::Instance->GameMode */
     return (gm == 3 || gm == 4) ? 1 : 0;   /* 3=LAN, 4=Internet */
-}
-
-/* 工程师占敌楼的损伤模式 (判据见 .h; 与 Ares 的 gameMode/allowDamage 同式)。 */
-int OU_EngDamageOn(void)
-{
-    int gm = *(int*)ADDR_GAMEMODE;
-    if (gm == 0) return 0;           /* 战役/菜单: Ares 硬编码不做损伤 */
-    if (gm == 5)                     /* 遭遇战: 看"多位工程师"勾选 */
-        return *(unsigned char*)ADDR_MULTI_ENGINEER ? 1 : 0;
-    return 1;                        /* LAN/Internet: 恒按开 */
 }
 
 /* 建筑实例 → 类型 (BuildingTypeClass); 非建筑/读不到回 NULL。 */
@@ -513,7 +501,6 @@ static int OU_MouseCellInner(int* cx, int* cy, void** tgtOut, int* px, int* py,
     pt.X = mx; pt.Y = my;
     /* ProcessClickCoords 按视口空间判格, GtMouseGameXY 给物理点,
      * 放大档须先过缩放反变换 (scale=1 恒等); 栏带不进引擎查询。 */
-    if (!SB_MapPoint(&pt)) return 0;
     if (!FN_CLICKCOORDS((void*)ADDR_DISPLAY, &pt, &center, &crd,
                         &tgtObj, &b5, &b6))
         return 0;
@@ -899,7 +886,8 @@ int OU_ProjWorld(int lx, int ly, int lz, int* px, int* py)
     c.X = lx; c.Y = ly; c.Z = lz;
     o.X = 0; o.Y = 0;
     FN_OU_C2C(tac, &c, &o);
-    if (!SB_ViewToScreen(o.X, o.Y, px, py)) { *px = o.X; *py = o.Y; }
+    *px = o.X;
+    *py = o.Y;
     return 1;
 }
 
@@ -1016,22 +1004,9 @@ void OU_Box(unsigned char* locked, int w, int h, int pitch,
             OU_Put(locked, w, h, pitch, clip, cx + k, cy + j, r, g, b, a);
 }
 
-void OU_ViewClip(OuClip* clip, int w, int h)
-{
-    RectangleStruct a;
-    if (!clip) return;
-    clip->x0 = 0; clip->y0 = 0; clip->x1 = w; clip->y1 = h;
-    FM_GetViewRects(&a, 0);
-    if (a.Width < 16 || a.Height < 16) return;   /* 读不到视口: 不裁剪 */
-    if (a.X > 0) clip->x0 = a.X;
-    if (a.Y > 0) clip->y0 = a.Y;
-    if (a.X + a.Width < w) clip->x1 = a.X + a.Width;
-    if (a.Y + a.Height < h) clip->y1 = a.Y + a.Height;
-}
-
 /* 虚线: 沿线段每 (dash+gap) 像素画 dash 段实线, 其余留空 (风格贴近引擎聚集点线)。 */
 void OU_ThinLineDash(unsigned char* locked, int w, int h, int pitch,
-                     const OuClip* clip, int x0, int y0, int x1, int y1,
+                     int x0, int y0, int x1, int y1,
                      unsigned r, unsigned g, unsigned b, unsigned a,
                      int thick, int dash, int gap)
 {
@@ -1054,8 +1029,6 @@ void OU_ThinLineDash(unsigned char* locked, int w, int h, int pitch,
         px = x0 + (int)(((long long)dx * i) / n);
         py = y0 + (int)(((long long)dy * i) / n);
         if (px < 0 || py < 0 || px >= w || py >= h) continue;
-        if (clip && (px < clip->x0 || px >= clip->x1 ||
-                     py < clip->y0 || py >= clip->y1)) continue;
         for (k = 0; k < thick; k++)
         {
             unsigned short* row;
@@ -1099,7 +1072,7 @@ int OU_PrevPushCell(OU_PrevLine* buf, int* nio, void* u, int cx, int cy)
 }
 
 void OU_PrevDraw(OU_PrevLine* buf, int n, unsigned char* locked, int w, int h, int pitch,
-                 const OuClip* clip, unsigned r, unsigned g, unsigned b, unsigned a, int thick)
+                 unsigned r, unsigned g, unsigned b, unsigned a, int thick)
 {
     void* tac;
     int k;
@@ -1112,13 +1085,13 @@ void OU_PrevDraw(OU_PrevLine* buf, int n, unsigned char* locked, int w, int h, i
         int ux, uy, tx, ty;
         if (!OU_ProjWorld(buf[k].ulx, buf[k].uly, buf[k].ulz, &ux, &uy)) continue;
         if (!OU_ProjWorld(buf[k].tlx, buf[k].tly, buf[k].tlz, &tx, &ty)) continue;
-        OU_Line(locked, w, h, pitch, clip, ux, uy, tx, ty, r, g, b, a, thick);
+        OU_Line(locked, w, h, pitch, 0, ux, uy, tx, ty, r, g, b, a, thick);
     }
 }
 
 /* 同 OU_PrevDraw, 但画虚线 (dash 实 / gap 空 像素)。 */
 void OU_PrevDrawDash(OU_PrevLine* buf, int n, unsigned char* locked, int w, int h, int pitch,
-                     const OuClip* clip, unsigned r, unsigned g, unsigned b, unsigned a,
+                     unsigned r, unsigned g, unsigned b, unsigned a,
                      int thick, int dash, int gap)
 {
     void* tac;
@@ -1132,8 +1105,7 @@ void OU_PrevDrawDash(OU_PrevLine* buf, int n, unsigned char* locked, int w, int 
         int ux, uy, tx, ty;
         if (!OU_ProjWorld(buf[k].ulx, buf[k].uly, buf[k].ulz, &ux, &uy)) continue;
         if (!OU_ProjWorld(buf[k].tlx, buf[k].tly, buf[k].tlz, &tx, &ty)) continue;
-        OU_ThinLineDash(locked, w, h, pitch, clip, ux, uy, tx, ty, r, g, b, a,
-                        thick, dash, gap);
+        OU_ThinLineDash(locked, w, h, pitch, ux, uy, tx, ty, r, g, b, a, thick, dash, gap);
     }
 }
 
@@ -1354,10 +1326,9 @@ void OU_HotkeyText(const OU_Hotkey* hk, char* buf, int buflen)
 /* 帧内缓存: GetAsyncKeyState 是 user32 系统调用 (~1us), 而一帧里十来个 Draw
  * 各查一遍 Ctrl/Shift/中键就是十几 us 白烧 (实测 sm/msgtail 段)。同一游戏帧
  * 内同一键只问一次系统; 暂停时帧号冻结 (迷你循环), 用 16ms 墙钟兜底重查,
- * 保证 F5 之类在暂停中照样灵敏。时间戳按 vk 分开存: 一次查询只能延长自己那个
- * 键的缓存有效期, 否则帧号冻结时某键会被别的键一直按在缓存里, 采不到松开。 */
+ * 保证 F5 之类在暂停中照样灵敏。 */
 static unsigned s_KeyFr[256];
-static unsigned s_KeyTick[256];
+static unsigned s_KeyTick = 0;
 static unsigned char s_KeyDown[256];
 
 int OU_KeyDown(unsigned vk)
@@ -1367,11 +1338,11 @@ int OU_KeyDown(unsigned vk)
     if (!vk || vk > 255) return 0;
     fr = *(volatile unsigned*)(size_t)ADDR_FRAME;   /* 引擎帧号 */
     now = GetTickCount();
-    if (s_KeyFr[vk] == fr && (unsigned)(now - s_KeyTick[vk]) < 16u)
+    if (s_KeyFr[vk] == fr && (now - s_KeyTick) < 16u)
         return s_KeyDown[vk] ? 1 : 0;
     d = (GetAsyncKeyState((int)vk) & 0x8000) ? 1 : 0;
     s_KeyFr[vk] = fr;
-    s_KeyTick[vk] = now;
+    s_KeyTick = now;
     s_KeyDown[vk] = (unsigned char)d;
     return d;
 }
@@ -1428,29 +1399,6 @@ void OU_ReadString(const char* section, const char* key, const char* def,
         for (i = 0; i < buflen - 1 && def[i]; i++) buf[i] = def[i];
         buf[i] = 0;
     }
-}
-
-/* 名单行: 逗号/空白分隔, 就地切成若干段 (段尾写 0), 返回条数。
- * 段指针指向 buf 内部, 生命周期跟 buf 一致。';' 已由 OU_ReadString 截掉。 */
-int OU_ReadList(const char* section, const char* key, const char* def,
-                char* buf, int buflen, const char** out, int max)
-{
-    char* s;
-    int n = 0;
-    if (!buf || buflen <= 0 || !out || max <= 0) return 0;
-    OU_ReadString(section, key, def, buf, buflen);
-    s = buf;
-    while (*s && n < max)
-    {
-        char* st;
-        while (*s == ' ' || *s == '\t' || *s == ',') s++;
-        if (!*s) break;
-        st = s;
-        while (*s && *s != ',' && *s != ' ' && *s != '\t') s++;
-        if (*s) *s++ = 0;
-        out[n++] = st;
-    }
-    return n;
 }
 
 int OU_ReadHotkey(const char* section, const char* key, OU_Hotkey* io)

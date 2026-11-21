@@ -1,0 +1,2 @@
+#include "IconRes.h"
+ICONRES_AGGRESSIVE RCDATA "src\\render\\assets\\icon_aggressive.pcx"

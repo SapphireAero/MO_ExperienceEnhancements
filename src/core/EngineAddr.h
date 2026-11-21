@@ -8,7 +8,7 @@
 
 /* Unsorted::CurrentFrame - 逻辑帧号, 每帧 +1; 倒退 = 新开局或读档。 */
 #define ADDR_FRAME              0xA8ED84u
-#define ADDR_FRAME_NO           0xA8ED84u   /* 旧名 (FrameCap/MOExperience 用过), 同址 */
+#define ADDR_FRAME_NO           0xA8ED84u   /* 供核心轮询和 FrameCap 使用 */
 
 /* ScenarioClass::Instance - 换图代号取它的首字段。 */
 #define ADDR_SCENARIO           0xA8B230u
@@ -22,17 +22,6 @@
 /* SessionClass::Instance - 首成员即 GameMode (0=战役/菜单 3=LAN 4=Internet 5=Skirmish)。 */
 #define ADDR_SESSION            0xA8B238u
 #define ADDR_GAMEMODE           0xA8B238u   /* 旧名, 同址 */
-
-/* GameModeOptionsClass::Instance.MultiEngineer (0xA8B250 + 0x1C, YRpp
- * Unsorted::MultiEngineer): 遭遇战设置里的"多位工程师"勾选。Ares 拿它决定
- * 工程师占敌楼是先损伤还是直接占领 (见 OU_EngDamageOn)。 */
-#define ADDR_MULTI_ENGINEER     0xA8B26Cu
-
-/* GameModeOptionsClass::Instance.BuildOffAlly (0xA8B250 + 0x14, YRpp
- * GameModeOptionsClass.h): 建造范围扫描 0x4A8FFA 判它决定要不要把盟友建造场
- * 算进基地范围。引擎只在遭遇战存/读整块 GameModeOptions, 战役读档后该值不
- * 恢复, 由 BuildAlly_Poll 补回 (见 BuildAlly.cpp)。 */
-#define ADDR_BUILD_OFF_ALLY     0xA8B264u
 
 /* Game::IsActive (bool, YRpp Unsorted.h)。 */
 #define ADDR_ISACTIVE           0xA8E9A0u
@@ -67,12 +56,6 @@
  * 均通过 [ecx+0x30C] 访问。 */
 #define OFF_HOUSE_MONEY         0x30Cu
 
-/* HouseClass::PlanningPaths[12] - WaypointPathClass* 数组。
- * 0x5023B0 GetPlanningWaypointAt 按 CellStruct 遍历它, 空槽 new(0x40) 现建。
- * 崩溃取证用: 整表没初始化 与 只有一格被写坏 是两种完全不同的病因。 */
-#define OFF_HOUSE_PLANPATHS     0x210u
-#define HOUSE_PLANPATH_N        12
-
 /* HouseTypeClass::MultiplayPassive - 中立方为 1。 */
 #define OFF_HTYPE_PASSIVE       0x1A6u
 
@@ -84,20 +67,10 @@
 #define OFF_NEXT_OBJ            0x30u     /* ObjectClass::NextObject */
 #define OFF_OWNER               0x21Cu    /* TechnoClass::Owner -> HouseClass* */
 #define OFF_BLD_TYPE            0x520u    /* BuildingClass::Type */
-#define OFF_BLD_REPAIRING       0x6E8u    /* "正在被修" 标志 (IsBeingRepaired)。
-                                           * UnitClass 与 BuildingClass 共用这个偏移:
-                                           * 载具 0x447017 置 1, 修满 0x4508D0/
-                                           * 0x4509B4 清 0; 建筑 0x43B98A 写。 */
+#define OFF_BLD_REPAIRING       0x6E8u    /* BuildingClass::IsBeingRepaired
+                                           * (0x4506C6 读 / 0x4509B4 清 0) */
 #define OFF_TYPE_STRENGTH       0xA0u     /* ObjectTypeClass::Strength
                                            * (0x5F5C42 自己的 `fild [eax+0xA0]`) */
-#define OFF_TYPE_ARMOR          0x9Cu     /* ObjectTypeClass::Armor = [ArmorTypes]
-                                           * 索引 (0x6F36F2 直接拿它当 Verses 下标) */
-#define OFF_TYPE_IMMUNE         0x233u    /* ObjectTypeClass::Immune (`Immune=yes`)
-                                           * 邻位: 0x22F RadarInvisible / 0x230
-                                           * Selectable / 0x231 LegalTarget /
-                                           * 0x232 Insignificant。样板 0x5F53CF
-                                           * `call [eax+0x88]; mov cl,[eax+0x233]`;
-                                           * 键名串表在 0x832B5x 一带。 */
 #define OFF_TECH_TOKEN          0x514u    /* TechnoClass 规划令牌 (0x705D20 实证) */
 
 /* 动态向量 (DynamicVectorClass) 通用布局。 */
@@ -151,96 +124,6 @@
 /* TechnoClass 成员。Veterancy 是 float: 0~1 = 新兵升老兵进度, 1~2 = 老兵升精英,
  * <0 = 不吃经验 (YRpp VeterancyStruct::IsNegative)。Ammo 是当前弹药。 */
 #define OFF_TECH_VETERANCY      0x150u
-/* 箱子加成的倍率 (double), 紧跟在 Veterancy + align 之后。
- * 实证 = 箱子拾取分支自己: 0x482E71 `fmul qword [ecx+0x158]` / 0x482E79 存回,
- * 前一条 0x482E61 `cmp dword [ecx+0x15C],0x3FF00000` (= 现值是不是 1.0);
- * 火力同形在 0x483240 / 0x483248 (偏移 +0x160 / 高半 +0x164)。
- * **升级给的倍率不在这里** —— 引擎用 HasAbility 现算 (见 FN_TECH_HASABILITY),
- * 这两个字段只有箱子 (与 Ares AttachEffect) 会写。 */
-#define OFF_TECH_ARMOR_MULT     0x158u
-#define OFF_TECH_FIREPOWER_MULT 0x160u
-/* FootClass::SpeedMultiplier (double): 速度箱子分支 0x483060
- * `fmul qword [edi+0x580]` → 0x48306C 存回, 同一处 0x483057 `cmp eax,2` 跳过飞机。
- * 0x578 是 SpeedPercentage (YRpp FootClass.h `unused_574` 往后数)。 */
-#define OFF_FOOT_SPEED_MULT     0x580u
-/* TechnoClass::Cloakable (bool): 隐形箱子分支 0x48294F `mov byte [edx+0x3D2],1`。
- * 类型的 `Cloakable=` 在建对象时也会置它, 所以"箱子给的隐形"要再看类型键
- * (ini 走 ReadBool, 别猜 TechnoTypeClass 偏移)。 */
-#define OFF_TECH_CLOAKABLE      0x3D2u
-
-/* TechnoClass::CloakState (int, YRpp CloakState 枚举): 0=Uncloaked 1=Cloaking
- * 2=Cloaked 3=Uncloaking。紧跟在 Owner(0x21C) 之后; 写入点 0x454E85
- * `mov dword [esi+0x220],2` = Cloak() 落到完全隐形态。 */
-#define OFF_TECH_CLOAKSTATE     0x220u
-#define CLOAKSTATE_CLOAKED      2
-
-/* TechnoClass 上的"鼠标命中豁免"标记 (bool, 语义未定)。全 exe 仅 7 处引用,
- * 都是 `mov al,[x+0x41A]; test al,al; jne 放行` —— 置位时跳过隐形可见性检查
- * (0x6DA3FF 像素命中 / 0x69252D 点击后处理)。照抄引擎, 不猜含义。 */
-#define OFF_TECH_HITEXEMPT      0x41Au
-
-/* 引擎原生自愈: 虚函数 vtable+0x294 = ShouldSelfHealOneStep, 调用点 0x6FA743
- * (`mov eax,[esi]; call [eax+0x294]`, 前面 0x6FA735 先判 [esi+0x90]=IsAlive)。
- * Ares 把这个虚函数整个换掉 (Ares 源码 Hooks.cpp DEFINE_HOOK 0x6FA743)。
- *
- * SelfHealing (TechnoTypeClass, bool): 0x70BE8D
- *   `call [eax+0x84]` 取类型 → `mov cl,[eax+0xD14]; test cl,cl` 非零即"能自愈",
- *   就是这条坐实了偏移。ini 键同名, 但直接读内存比再解析一遍更省也更快。
- * Organic (TechnoTypeClass, bool): 0x71503F `mov [ebp+0xD97], al`, 键名前一条
- *   0x71502B `push 0x843714`("Organic") → 0x5295F0 ReadBool。只有生物载具为真,
- *   它决定"载具按步兵口径还是载具口径回血"。 */
-#define OFF_TYPE_SELFHEAL       0xD14u
-#define OFF_TYPE_ORGANIC        0xD97u
-
-/* TechnoTypeClass::SpeedType (int, YRpp GeneralDefinitions.h 的 SpeedType 枚举:
- * Foot0 Track1 Wheel2 Hover3 Winged4 Float5 Amphibious6 FloatBeach7, 缺键时
- * UnitType 兜底成 Track/Wheel)。
- *   写入: 0x7121E5 `mov [ebp+0x67C], eax`, 紧跟 `push 0x844504`("SpeedType")
- *         + call 0x476FC0 之后; UnitType 侧 0x74770B 再写一次 (-1 兜底在 0x7476D9)。
- *   读取: 0x7400CC `cmp dword [eax+0x67C], 3` —— 引擎自己按它判"悬浮",
- *         eax 来自 0x7400C6 `mov eax,[esi+0x6C4]` (就是 OFF_UNIT_TYPE 那个槽)。
- * 判悬浮直接读这一对, 不要自己解析 ini。 */
-#define OFF_TYPE_SPEEDTYPE      0x67Cu
-#define SPEEDTYPE_HOVER         3
-#define SPEEDTYPE_WINGED        4
-
-/* TechnoTypeClass::MovementZone (int, YRpp GeneralDefinitions.h 的 MovementZone 枚举,
- * Fly = 9)。写入: 0x716081 `mov [ebp+0x5B4], eax`, 紧跟 `push`("MovementZone")
- * + call 0x476FC0 之后 (同一函数里 SpeedType 落 +0x67C)。判"会不会飞"优先读它。 */
-#define OFF_TYPE_MOVEMENTZONE   0x5B4u
-#define MOVEMENTZONE_FLY        9
-
-/* HouseClass 上的合计 (int, 累加值不是布尔): 面板只读这两个数就算完了。
- * 0x446392 `mov eax,[ebp+0x21C]`(建筑的 owner House) + `add [eax+0x164], ecx`
- * (ecx = 类型 +0x1564), 0x4463B4 同形写 +0x168 (类型 +0x1568); 拆楼/卖掉在
- * 0x4459AE / 0x448AE8 里 `sub` 并 clamp 到 0。Phobos
- * `TechnoExt::ApplyGainedSelfHeal` 判"有没有这个光环"读的也是这两处。 */
-#define OFF_HOUSE_INFSELFHEAL   0x164u
-#define OFF_HOUSE_UNITSELFHEAL  0x168u
-
-/* TechnoClass::HasAbility(Ability) (0x70D0D0, __thiscall, 只读, 返回 AL)。
- * 0x70D0D5 `lea edi,[esi+0x150]` 取 Veterancy, 0x74FF90/0x750010 判老兵/精英;
- * 类型取虚表 +0x84, 能力位 = [type+0x29C+ability] (老兵) / [type+0x2AE+ability]
- * (精英)。只读查询, 联机可用。ability 取值见 YRpp GeneralDefinitions.h
- * `enum class Ability` (Faster=0 Stronger=1 Firepower=2 ROF=4 Sight=5
- * Cloak=6 SelfHeal=9), 这里只定义面板用到的。 */
-#define FN_TECH_HASABILITY      0x0070D0D0u
-#define ABIL_FASTER             0
-#define ABIL_STRONGER           1
-#define ABIL_FIREPOWER          2
-#define ABIL_SELFHEAL           9
-/* TechnoClass::Tiberium (StorageClass: 4 个 float, 每种矿石装了多少 bails)。
- * 0x73E412 `lea ecx,[esi+0x33C]` + call StorageClass::GetAmount 实证。
- * GetTotalValue (0x6C9600, __thiscall ecx=&Tiberium, 返回 int) 是引擎自己的
- * 折算: 逐种乘 TiberiumClass::Array[i]->Value(+0xB8) 累加, 即车上矿石的钱
- * (不含精炼厂 OrePurifier 加成)。只读, 联机可用。 */
-#define OFF_TECH_TIBERIUM       0x33Cu
-#define FN_STORAGE_TOTALVALUE   0x006C9600u
-/* UnitTypeClass::Harvester (bool): `Harvester=` 的解析结果, 0x7476B9
- * `mov [edi+0xE0E], al`; 紧邻 +0xE0F 是 `Weeder=` (0x7476CD)。
- * **只有 UnitTypeClass 有这一字节**, 别的类型不要读。 */
-#define OFF_UNITTYPE_HARVESTER  0xE0Eu
-
 #define OFF_TECH_AMMO           0x2FCu
 /* TechnoClass::Target: 当前攻击目标 (TarCom)。SetTarget (0x6FCDB0) 开头读旧值
  * 比较、末尾写入 0x2B4, 双向实证。 */
@@ -276,12 +159,6 @@
  * 空时落 ID (与引擎查 art 的顺序一致)。 */
 #define OFF_TYPE_ID             0x24u
 #define OFF_TYPE_IMAGEFILE      0x1F8u
-/* 类型的显示名 (wchar_t*) —— 引擎装载时把 UIName 的 CSF 键解析好存在这里:
- * 0x410960 `push 0x7f / push <AbsType.cpp> / xor edx,edx / call 0x734E60`
- * (StringTable::LoadString) 之后 `mov [esi+0x60], eax`; 没有 UIName 的类型
- * 落到常量 0x887734。键本身是 `type+0x3D` 的 char[0x20] (0x410AF2 处写入)。
- * 只读缓存, 不要自己调 CSF —— 那函数用 ecx/edx 传参 + 两个栈参 (文件名/行号)。 */
-#define OFF_TYPE_UINAME         0x60u
 
 /* CCINIClass::INI_Art (对象本体, 0x887180) 与 ReadString
  * (0x528A10, __thiscall: section, key, def, buf, size; 返回写入长度)。
@@ -304,14 +181,6 @@
  * 用途: Ares 的 TechnoType 键 `NoManualUnload=` (靠载员实现特殊功能的单位)。 */
 #define ADDR_INI_RULES          0x00887048u
 #define FN_INI_READBOOL         0x005295F0u
-
-/* INIClass::GetKeyCount (0x526960, __thiscall: section) /
- * GetKeyName (0x526CC0, __thiscall: section, index; 返回 ini 内部指针, 只在本次有效)。
- * 顺序 = 条目在文件里的出现顺序; Ares 的 `Enumerable<ArmorType>` 就用这对接口给
- * 护甲编号, 所以 `Armor` 字段值 == 护甲名在 `[ArmorTypes]` 里的键序号。
- * 节名同样受上面那条指针缓存约束: 传持久常量串。 */
-#define FN_INI_GETKEYCOUNT      0x00526960u
-#define FN_INI_GETKEYNAME       0x00526CC0u
 
 /* TechnoTypeClass 成员 (图标 SHP 与弹药上限)。CameoFile 是 `Cameo=` 写的文件名
  * (0x19 字节, 紧挨在 Cameo 指针前); MO 的图标多为 .pcx, 此时 Cameo 指向的是
@@ -353,9 +222,6 @@
 #define ADDR_SURF_COMPOSITE     0x0088731Cu
 #define ADDR_SURF_ALT           0x00887310u   /* 备用面 (崩溃诊断的面快照读它) */
 #define ADDR_VIEWBOUNDS         0x00886FA0u   /* ViewBounds (缩放档 = R) */
-/* WindowBounds = 窗口客户区 {0,0,客户宽,客户高}。Composite 建面恒按它分配
- * (隐藏侧栏那个功能要把地图铺到整窗), 所以面宽 = 窗口宽。*/
-#define ADDR_WINDOWBOUNDS       0x00886FB0u
 #define ADDR_TACTICAL           0x00887324u   /* TacticalClass::Instance (指针) */
 #define ADDR_WWMOUSE            0x00887640u
 /* TacticalClass::SetTacticalPosition(CoordStruct const*) (__thiscall)。
@@ -395,28 +261,6 @@
 #define OFF_CELL_ALTFLAGS       0x012Cu
 #define CELL_ALT_BUILDING       0x0002u
 #define CELL_SHROUD_REVEALED    0x0008u
-
-/* CellClass 的"隐形探测覆盖"计数: SensorsOfHouses 从 +0x7C 起, 每玩家一个
- * WORD (隐形探测器 SensorsSight 单位在场时 ++/--)。+0xAC 是 DisguiseSensors
- * 同形数组, 两者差 0x30 = 24 个玩家 x 2 字节; 0x486800 DrawObjectsCloaked
- * 同时读 +0x78(CloakedByHouses 位) 与 +0x7C, 三处互证。
- * 索引 = HouseClass::ArrayIndex (OFF_HOUSE_INDEX), 只有前 24 个玩家有效。 */
-#define OFF_CELL_SENSORS        0x007Cu
-#define CELL_SENSORS_MAXHOUSE   24
-
-/* CellClass::Sensors_InclHouse(int houseIdx) __thiscall, 返回 AL:
- * 实现就是 `[cell+0x7C+idx*2] > 0` (0x4870D0)。只读, 联机可调。 */
-#define FN_CELL_SENSORS         0x004870D0u
-
-/* DisplayClass::GetCellAtCoords(CoordStruct const*) __thiscall -> CellClass*:
- * 坐标 >> 8 得格, 查 Display+0x13C 的格表; 越界回占位格 0xABDC50 (恒非空)。
- * 0x692540 / 0x6DA41B 两处隐形可见性判定都用它。 */
-#define FN_GETCELLATCOORDS      0x00565730u
-
-/* TechnoTypeClass 上由 INI 键 InvisibleInGame 派生的标记 (bool, type+0xC9A):
- * 解析点 0x460DF1..0x460E09 (`ReadBool("InvisibleInGame")` 为真即置 1)。
- * 引擎取到点击对象后 0x69256B 读它, 非 0 直接清目标 —— 这类对象点不到。 */
-#define OFF_TYPE_INVISIBLE      0x0C9Au
 
 /* ==================== 动画类型 (天气 SHp 来源) ==================== */
 
@@ -756,30 +600,6 @@
  * InfantryClass 重写 (0x522C00 = 播 Sequence::Cheer); 收尾 `ret 4`。 */
 #define OFF_VT_CHEER            0x388u
 
-/* ==================== 单位损失播报 (RadarEvent / EVA) ==================== */
-
-/* RadarEventType::UnitLost (YRpp GeneralDefinitions.h:1112)。
- * Ares 3.0 把 FootClass::Destroyed 的 0x4D98C0 整段重写: 对"当前玩家控制"的
- * 阵亡单位调下面两个函数, 心控来的单位 Owner 已改成我方, 因此也算我方损失。
- * 这两个入口都是纯表现层 (本地雷达事件对象 / 本地 EVA 播放), Ares 与本项目
- * 均未在它们上面挂钩。 */
-#define RE_UNIT_LOST                7
-
-/* RadarEventClass::Create: fastcall(ecx=RadarEventType), 栈=CellStruct(4B), ret 4。
- * 站点 0x65FA70 的入口 6 字节 = push ebp / mov ebp,esp / and esp,~7 (无 rel),
- * 序言未执行时可直接跳下面的 ret 4。 */
-#define ADDR_RE_CREATE_RET          0x0065FB47u  /* 函数尾 ret 4 */
-
-/* VoxClass::PlayIndex: fastcall(ecx=语音索引, edx=nUnk), 栈=nUnk2, ret 4。
- * 站点 0x752480 的入口 5 字节是一条 mov eax,[abs] (无 rel)。Ares 的 EVA.Lost 走它,
- * 不走按名字的 VoxClass::Play (0x752700, 原版 FootClass::Destroyed 才用)。 */
-#define ADDR_VOX_PLAYINDEX_RET      0x00752581u  /* 函数尾 ret 4 */
-
-/* TechnoClass::IsMindControlled (0x7105E0): thiscall 无栈参, 纯只读,
- * 返回 [this+0x2C0] (MindControlledBy) || [this+0x2C4] (MindControlledByAUnit)。
- * MindSelect.cpp 与本模块共用, 覆盖临时心控与永久心控两种。返回值只有 AL 有效。 */
-#define FN_TECH_ISMINDCONTROLLED    0x007105E0u
-
 /* ==================== 事件 (EventClass) ==================== */
 
 #define EVT_SIZE                111u      /* EventClass 结构的字节数 */
@@ -791,7 +611,6 @@
 #define REG_OFF_ESI             0x0Cu     /* YRpp Syringe.h REGISTERS */
 #define REG_OFF_EDI             0x08u
 #define REG_OFF_EBP             0x10u
-#define REG_OFF_ESP             0x14u     /* 钩点现场栈顶 (MsgText 读栈参实证) */
 #define REG_OFF_EAX             0x24u
 #define REG_OFF_ECX             0x20u
 #define REG_OFF_EDX             0x1Cu

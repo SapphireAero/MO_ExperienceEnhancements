@@ -8,7 +8,7 @@
 #include <windows.h>
 #include "GdiText.h"
 #include "OrderUtil.h"
-#include "ScaleBar.h"
+#include "Observer.h"
 #include "WeaponRange.h"
 
 #define WR_SECTION "Features"
@@ -48,32 +48,6 @@ static void WR_EnsureInit(void)
     if (!g_WrEnable) LogLine("wrange: OFF");
     else if (g_WrAAZ > 0) LogLine("wrange: ON (ctrl+single, aa-high)");
     else LogLine("wrange: ON (ctrl+single, aa-ground)");
-}
-
-/* ---------------- 设置页运行期读写 ---------------- */
-
-int WeaponRange_Enabled(void)
-{
-    WR_EnsureInit();
-    return g_WrEnable;
-}
-
-void WeaponRange_SetEnabled(int on)
-{
-    WR_EnsureInit();
-    g_WrEnable = on ? 1 : 0;
-}
-
-int WeaponRange_Height(void)
-{
-    WR_EnsureInit();
-    return g_WrAAZ;
-}
-
-void WeaponRange_SetHeight(int v)
-{
-    WR_EnsureInit();
-    g_WrAAZ = (v < 0) ? 0 : (v > 8192 ? 8192 : v);
 }
 
 /* ---------------- 类型取得 (DeployPreview 同式) ---------------- */
@@ -619,17 +593,16 @@ static WRInfo WR_Resolve(void* u)
 
 static unsigned char* s_WrLocked = 0;
 static int s_WrW = 0, s_WrH = 0, s_WrPitch = 0;
-static OuClip s_WrClip;
 
 /* 1px 细线 (公共实现: OrderUtil 的 OU_Line)。 */
 static void WR_ThinLine(int x0, int y0, int x1, int y1,
                         int cr, int cg, int cb, unsigned a)
 {
-    OU_Line(s_WrLocked, s_WrW, s_WrH, s_WrPitch, &s_WrClip, x0, y0, x1, y1,
+    OU_Line(s_WrLocked, s_WrW, s_WrH, s_WrPitch, 0, x0, y0, x1, y1,
             (unsigned)cr, (unsigned)cg, (unsigned)cb, a, 1);
 }
 
-/* 世界点 → 屏像素 (DeployPreview 同系: CoordsToClient + 缩放折算)。 */
+/* 世界点 → 原生视口像素。 */
 static int WR_ProjLep(int lx, int ly, int lz, int* px, int* py)
 {
     void* tac = *(void**)WR_TAC_INSTANCE;
@@ -639,7 +612,8 @@ static int WR_ProjLep(int lx, int ly, int lz, int* px, int* py)
     c.X = lx; c.Y = ly; c.Z = lz;
     o.X = 0; o.Y = 0;
     FN_WR_C2C(tac, &c, &o);
-    if (!SB_ViewToScreen(o.X, o.Y, px, py)) { *px = o.X; *py = o.Y; }
+    *px = o.X;
+    *py = o.Y;
     return 1;
 }
 
@@ -688,18 +662,19 @@ void WeaponRange_Draw(void* surf, int w, int h, int pitch)
     if (!OU_KeyDown(VK_CONTROL)) return;   /* 按住 Ctrl 才显示 */
     if (!g_Calibrated) return;
     if (!surf || !IsPlausiblePtr(surf)) return;
-    if (w <= 0 || h <= 0 || pitch <= 0) return;
+    if (w <= 0 || h <= 0 || pitch < w * 2) return;
     selN = *(int*)ADDR_SELOBJ_COUNT;
     items = *(void***)ADDR_SELOBJ_ITEMS;
     if (selN != 1 || !items || !IsPlausiblePtr(items)) return;
     u = items[0];
     if (!u || !IsPlausiblePtr(u)) return;
+    void* player = *(void**)ADDR_CURPLAYER;
+    if (!player || (*(void**)((char*)u + OFF_OWNER) != player && !Observer_LocalIsSpectator())) return;
     r = WR_Resolve(u);
     if (!r.ok) return;
     locked = OU_SurfLock(surf);
     if (!locked) return;
     s_WrLocked = locked; s_WrW = w; s_WrH = h; s_WrPitch = pitch;
-    OU_ViewClip(&s_WrClip, w, h);
     /* 地面蓝圈 (当前武器) + 最小红圈 (0 不画) + 空中青虚线圈
      * + 隐形探测黄圈 + 间谍识别紫圈 (后两者 0 不画)。 */
     WR_Circle(r.center.X, r.center.Y, r.center.Z, r.range, 64, 128, 255, 230, 0);

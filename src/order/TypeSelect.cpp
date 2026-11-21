@@ -12,7 +12,7 @@
  * (IsVehicle 函数内部), 与本文件四个钩点均无重叠; 置位窗口内跳过 Ares 的
  * 内钩与 Phobos 行为一致 (Phobos 同样跳到 0x465D6A)。
  *
- * 钩子经 dist/MOExperience.dll.inj 由 Syringe 挂载 (寄存器结构见 YRpp Syringe.h,
+ * 钩子经 src/core/SyringeHooks.cpp 由 Syringe 挂载 (寄存器结构见 YRpp Syringe.h,
  * EAX 在 regs+0x24; 返回 0=跑原指令, 非0=跳往该地址):
  *   0x732A85 = TypeSelect_SetCtx, 7 (mov eax,[ebp+4] + mov edx,[esp+14])
  *   0x732B28 = TypeSelect_SetCtx, 6 (mov edx,[ebx+4] + mov esi,[edx+edi*4])
@@ -26,8 +26,8 @@
 
 #define TS_SECTION "Features"
 
-/* Syringe REGISTERS 布局 (YRpp Syringe.h): REG_OFF_ESP=0x14 / REG_OFF_ECX=0x20,
- * EAX 紧跟 ECX 之后。 */
+/* Syringe REGISTERS 布局 (YRpp Syringe.h, MsgText.cpp 的
+ * OFF_REG_ESP=0x14 / OFF_REG_ECX=0x20 可互证, EAX 紧跟 ECX 之后)。 */
 
 #define ADDR_ISVEHICLE_SKIP 0x00465D6Au
 

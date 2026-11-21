@@ -30,7 +30,7 @@
  *   rtti=7, heap=[type+0xDF8], naval=[type+0xCCE], houseIndex=[house+0x30]。
  *   点击钩子寄存器: EBP=abs, EDI=图标类型, ESI=工厂。
  *
- * 钩子经 dist/MOExperience.dll.inj 由 Syringe 挂载 (返回 0=跑原指令, 非0=跳往)。
+ * 钩子经 src/core/SyringeHooks.cpp 由 Syringe 挂载 (返回 0=跑原指令, 非0=跳往)。
  */
 
 #include <windows.h>
@@ -1027,18 +1027,3 @@ extern "C" __declspec(dllexport) DWORD __cdecl BQ_ShowCount(void* regs)
  * 后者会在开工换指针时丢单。 */
 
 /* GUI 设置菜单用的运行时开关/查询 (ESC 菜单 "建筑队列" 开关)。 */
-int BQ_Enabled(void)
-{
-    BQ_EnsureInit();
-    return g_BQEnable;
-}
-
-void BQ_SetEnabled(int enable)
-{
-    BQ_EnsureInit();
-    g_BQEnable = enable ? 1 : 0;
-    if (g_BQEnable) BQ_ReadyLeftPatch(); /* 幂等; 菜单开时补挂就绪左对齐桩 */
-    LogLine(g_BQEnable ? "bqueue: enabled (menu)"
-                       : "bqueue: disabled (menu)");
-}
-

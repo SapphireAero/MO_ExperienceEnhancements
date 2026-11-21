@@ -127,15 +127,6 @@ int OU_IsTarget(void* p);
 /* 联机判定 (GameMode 3=LAN/4=Internet, 其它单机)。订单系统共用。 */
 int OU_IsMP(void);
 
-/* 工程师占敌楼是否"先损伤、占领不了" (Ares MultiEngineer)。
- * 关 = 一个工程师直接占领整栋楼, 派第二个是白跑 (楼已归我, 后来的人只会
- * 被当成维修消耗掉), 分配时按楼限 1。
- * 判据同 Ares InfantryExt::GetEngineerEnterEnemyBuildingAction:
- *   战役 (GameMode 0) 恒关 —— Ares 硬编码单人任务不做损伤;
- *   遭遇战 (5) 看 GameModeOptionsClass.MultiEngineer 勾选;
- *   LAN/Internet 恒开。纯只读, 联机安全。 */
-int OU_EngDamageOn(void);
-
 /* ---------------- 下令资格 (敌我识别, 全下单模块共用) ----------------
  * 引擎允许单独选中一个非己方单位, 不过滤就能把敌人的车开走/展开。
  * 敌人与中立 (HouseType::MultiplayPassive) 一律不可控; 盟友只在"近距离
@@ -235,8 +226,8 @@ int OU_MouseCellPx(int* cx, int* cy, int* px, int* py);
 /* 同上 + 点中对象 (智能下令用; tgtOut 可空, 无目标时写 0, 返回值仍是格有效性)。 */
 int OU_MouseCellTarget(int* cx, int* cy, void** tgtOut, int* px, int* py);
 /* ---------------- 屏→格换算的"静默"标志 ----------------
- * ProcessClickCoords (0x692300) 及其调用点挂着几条点击/悬停门 (MsgText 0x69234B、
- * UP 0x692361、FullMap 0x692406 / 0x692FDC、SWS 0x692419)。这些门只按**真实
+ * ProcessClickCoords (0x692300) 上挂着几条点击/悬停门 (MsgText 0x69234B、
+ * UP 0x692361、FullMap 0x692406 / 0x692F3D、SWS 0x692419)。这些门只按**真实
  * 鼠标位置**判定, 命中就把整次调用截到"平衡返回出口", 完全不区分调用方是不是
  * 引擎在处理点击。所以拿任意屏点做换算的模块 (格网/箱子图标的视图格矩形) 一碰上
  * 鼠标压在侧栏图标或单位面板上, 换算结果就整批作废 —— 表现为这些叠加层"整个消失"。
@@ -330,11 +321,6 @@ void OU_Box(unsigned char* locked, int w, int h, int pitch,
             const OuClip* clip, int cx, int cy, int m,
             unsigned r, unsigned g, unsigned b, unsigned a);
 
-/* 战场视口当裁剪框 (与投影点同一坐标系)。底栏带子/侧栏列不在视口内且不是
- * 每帧重画, 手绘线/框画进去就是残影 —— 贴在战场上的手绘层都要用它当 clip。
- * 读不到视口时不裁剪。 */
-void OU_ViewClip(OuClip* clip, int w, int h);
-
 /* 存一对端点 (leptons 世界坐标; 满回 0)。 */
 int OU_PrevPush(OU_PrevLine* buf, int* nio,
                 int ulx, int uly, int ulz, int tlx, int tly, int tlz);
@@ -342,16 +328,16 @@ int OU_PrevPush(OU_PrevLine* buf, int* nio,
 int OU_PrevPushObjs(OU_PrevLine* buf, int* nio, void* u, void* t);
 /* 起点取单位中心, 终点取落点格心地表高度 (含桥面, 与空军高度无关)。 */
 int OU_PrevPushCell(OU_PrevLine* buf, int* nio, void* u, int cx, int cy);
-/* 绘制全部预览线 (逐对引擎投影, 失败跳过)。thick = 线宽像素; clip 见 OU_ViewClip。 */
+/* 绘制全部预览线 (逐对引擎投影, 失败跳过)。thick = 线宽像素。 */
 void OU_PrevDraw(OU_PrevLine* buf, int n, unsigned char* locked, int w, int h, int pitch,
-                 const OuClip* clip, unsigned r, unsigned g, unsigned b, unsigned a, int thick);
+                 unsigned r, unsigned g, unsigned b, unsigned a, int thick);
 /* 同 OU_PrevDraw, 画虚线 (每 dash 像素实 / 后 gap 像素空)。 */
 void OU_PrevDrawDash(OU_PrevLine* buf, int n, unsigned char* locked, int w, int h, int pitch,
-                     const OuClip* clip, unsigned r, unsigned g, unsigned b, unsigned a,
+                     unsigned r, unsigned g, unsigned b, unsigned a,
                      int thick, int dash, int gap);
-/* 单像素细虚线 (逐像素插值, 自带面内裁剪; clip 同上)。 */
+/* 单像素细虚线 (逐像素插值, 自带裁剪)。 */
 void OU_ThinLineDash(unsigned char* locked, int w, int h, int pitch,
-                     const OuClip* clip, int x0, int y0, int x1, int y1,
+                     int x0, int y0, int x1, int y1,
                      unsigned r, unsigned g, unsigned b, unsigned a,
                      int thick, int dash, int gap);
 /* 预览节流 (三家规划线共用): 换格/换key且距上次>minMs, 或超 refreshMs 刷一次。
@@ -384,10 +370,6 @@ int OU_HotkeyDown(const OU_Hotkey* hk);
 /* 从 ini 读字符串: 行尾 ;注释截掉, 两端去空; 缺键/空值用 def。无 CRT。 */
 void OU_ReadString(const char* section, const char* key, const char* def,
                    char* buf, int buflen);
-/* 当名单读: 逗号/空白分隔, 就地切段后把段首指针写进 out, 返回条数。
- * 段指针指向 buf 内部 (buf 必须是静态/持久的), 最长 max 条。 */
-int OU_ReadList(const char* section, const char* key, const char* def,
-                char* buf, int buflen, const char** out, int max);
 /* 从 ini 读热键串 (缺键/空串/坏串回 0, 调用方保留原值; 成功含 None 回 1)。 */
 int OU_ReadHotkey(const char* section, const char* key, OU_Hotkey* io);
 /* 单行开关+热键 (缺键/空串/坏串=默认值启用; "0"=禁用; 其它按 Hotkey 串解析,

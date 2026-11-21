@@ -1,18 +1,7 @@
-/build
-/dist/*
-!/dist/MOExperience.dll.inj
-!/dist/MOExperience.ini
-!/dist/MOExperienceResources/
-!/dist/MOExperienceResources/*.ini
-/test/*.exe
-/test/*.o
+obj/
+__pycache__/
 
-/obj
-/test
-/tools
-
-other/计划.md
-*.bak
-/other
-/docs/other
-/icons/Original
+/dist/*.dll
+*.zip
+/删除/
+/人工复测.md
