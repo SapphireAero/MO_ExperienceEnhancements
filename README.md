@@ -18,7 +18,3 @@
 ## 构建
 
 使用 32 位 MinGW-w64 运行 `python build.py`，DLL 输出到 `dist/`。开发入口见[源码结构](源码结构.md)。
-
-## 许可
-
-SA_EE 修改者有权授权的原创新增和改动采用 [MIT 许可](LICENSE-MIT.txt)。上游 MO_ExperienceEnhancements 的代码、素材及其他第三方内容仍按各自条款处理。此声明不授予对整个插件或 DLL 的 MIT 许可。
